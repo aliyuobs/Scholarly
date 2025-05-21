@@ -401,3 +401,142 @@
     )
   )
 )
+
+;; Add a validator (contract admin only)
+(define-public (add-validator (validator principal))
+  (begin
+    ;; Validate validator input
+    (asserts! (validate-principal validator) ERR_BAD_INPUT)
+    
+    ;; Validate validator is not tx-sender (avoid self-authorization)
+    (asserts! (not (is-eq validator tx-sender)) ERR_BAD_INPUT)
+    
+    ;; Check authorization
+    (asserts! (is-eq tx-sender CONTRACT_ADMIN) ERR_UNAUTHORIZED)
+    
+    ;; Check if already exists and active
+    (let ((existing-validator (map-get? approved-validators { validator: validator })))
+      (asserts! (or (is-none existing-validator) 
+                    (not (get active (default-to { active: false } existing-validator)))) 
+                ERR_DUPLICATE_ENTRY)
+    )
+    
+    ;; Add validator
+    (map-set approved-validators
+      { validator: validator }
+      { active: true }
+    )
+    (ok true)
+  )
+)
+
+;; Remove a validator (contract admin only)
+(define-public (remove-validator (validator principal))
+  (begin
+    ;; Validate validator input
+    (asserts! (validate-principal validator) ERR_BAD_INPUT)
+    
+    ;; Check authorization
+    (asserts! (is-eq tx-sender CONTRACT_ADMIN) ERR_UNAUTHORIZED)
+    
+    ;; Validate validator exists and is active
+    (let ((existing-validator (map-get? approved-validators { validator: validator })))
+      (asserts! (is-some existing-validator) ERR_NOT_FOUND)
+      (asserts! (get active (default-to { active: false } existing-validator)) ERR_NOT_FOUND)
+    )
+    
+    ;; Deactivate validator
+    (map-set approved-validators
+      { validator: validator }
+      { active: false }
+    )
+    (ok true)
+  )
+)
+
+;; Claim scholarly recognition rewards
+(define-public (claim-recognition)
+  (let
+    ((scholar tx-sender)
+     (rewards (default-to { recognition-points: u0 } (map-get? scholarly-recognition { scholar: scholar }))))
+    (begin
+      (asserts! (> (get recognition-points rewards) u0) ERR_INVALID_PARAMS)
+      
+      ;; Reset recognition points (In a real implementation, this would transfer tokens)
+      (map-set scholarly-recognition
+        { scholar: scholar }
+        { recognition-points: u0 }
+      )
+      
+      (ok (get recognition-points rewards))
+    )
+  )
+)
+
+;; Read-only functions
+
+;; Get publication details
+(define-read-only (get-publication-details (publication-id (string-ascii 64)))
+  (map-get? publications { publication-id: publication-id })
+)
+
+;; Get reference details
+(define-read-only (get-reference-details (referencing-pub (string-ascii 64)) (referenced-pub (string-ascii 64)))
+  (map-get? reference-records { referencing-pub: referencing-pub, referenced-pub: referenced-pub })
+)
+
+;; Get reference count for a publication
+(define-read-only (get-reference-count (publication-id (string-ascii 64)))
+  (default-to { count: u0 } (map-get? reference-counts { publication-id: publication-id }))
+)
+
+;; Get scholar profile
+(define-read-only (get-scholar-profile (scholar principal))
+  (default-to 
+    { total-publications: u0, total-references-received: u0, impact-score: u0 }
+    (map-get? scholar-profiles { scholar: scholar })
+  )
+)
+
+;; Get discipline metrics
+(define-read-only (get-discipline-metrics (discipline (string-ascii 64)))
+  (default-to
+    { total-publications: u0, total-references: u0 }
+    (map-get? discipline-metrics { discipline: discipline })
+  )
+)
+
+;; Get recognition points for a scholar
+(define-read-only (get-recognition-points (scholar principal))
+  (get recognition-points (default-to { recognition-points: u0 } (map-get? scholarly-recognition { scholar: scholar })))
+)
+
+;; Check if a user is a validator
+(define-read-only (is-validator (validator principal))
+  (let
+    ((validator-data (map-get? approved-validators { validator: validator })))
+    (if (is-some validator-data)
+      (get active (unwrap! validator-data false))
+      false
+    )
+  )
+)
+
+;; Get all references for a publication
+(define-read-only (get-references-for-publication (publication-id (string-ascii 64)) (as-referenced bool))
+  (if as-referenced
+    ;; Get all references where this publication is referenced
+    (get-references-for-referenced-publication publication-id u0)
+    ;; Get all references where this publication references others
+    (get-references-for-referencing-publication publication-id u0)
+  )
+)
+
+;; Helper functions for pagination (would need modification for real implementation)
+(define-private (get-references-for-referenced-publication (publication-id (string-ascii 64)) (index uint))
+  (ok "References would be returned here with pagination")
+)
+
+(define-private (get-references-for-referencing-publication (publication-id (string-ascii 64)) (index uint))
+  (ok "References would be returned here with pagination")
+)
