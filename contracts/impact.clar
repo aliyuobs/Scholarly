@@ -238,3 +238,166 @@
     )
   )
 )
+
+;; Add a reference between two publications
+(define-public (add-reference
+               (referencing-pub (string-ascii 64))
+               (referenced-pub (string-ascii 64))
+               (note (optional (string-utf8 256)))
+               (significance uint))
+  (let
+    ((referencing-pub-data (map-get? publications { publication-id: referencing-pub }))
+     (referenced-pub-data (map-get? publications { publication-id: referenced-pub })))
+    (begin
+      ;; Validate inputs
+      (asserts! (validate-publication-id referencing-pub) ERR_BAD_INPUT)
+      (asserts! (validate-publication-id referenced-pub) ERR_BAD_INPUT)
+      (asserts! (validate-optional-string-utf8 note) ERR_BAD_INPUT)
+      
+      ;; Check if publications exist
+      (asserts! (is-some referencing-pub-data) ERR_NOT_FOUND)
+      (asserts! (is-some referenced-pub-data) ERR_NOT_FOUND)
+      
+      ;; Check if caller is the scholar of the referencing publication
+      (asserts! (is-eq tx-sender (get scholar (unwrap! referencing-pub-data ERR_NOT_FOUND))) ERR_UNAUTHORIZED)
+      
+      ;; Prevent self-reference (same publication)
+      (asserts! (not (is-eq referencing-pub referenced-pub)) ERR_SELF_REFERENCE)
+      
+      ;; Check valid significance (1-10)
+      (asserts! (and (>= significance u1) (<= significance u10)) ERR_INVALID_PARAMS)
+      
+      ;; Record the reference
+      (map-set reference-records
+        { referencing-pub: referencing-pub, referenced-pub: referenced-pub }
+        {
+          timestamp: block-height,
+          note: note,
+          significance: significance
+        }
+      )
+      
+      ;; Update reference count for referenced publication
+      (map-set reference-counts
+        { publication-id: referenced-pub }
+        { count: (+ (get count (default-to { count: u0 } (map-get? reference-counts { publication-id: referenced-pub }))) u1) }
+      )
+      
+      ;; Update total references received for referenced publication's scholar
+      (map-set scholar-profiles
+        { scholar: (get scholar (unwrap! referenced-pub-data ERR_NOT_FOUND)) }
+        (merge
+          (default-to
+            { total-publications: u0, total-references-received: u0, impact-score: u100 }
+            (map-get? scholar-profiles { scholar: (get scholar (unwrap! referenced-pub-data ERR_NOT_FOUND)) })
+          )
+          { 
+            total-references-received: (+ 
+              (get total-references-received
+                (default-to
+                  { total-publications: u0, total-references-received: u0, impact-score: u100 }
+                  (map-get? scholar-profiles { scholar: (get scholar (unwrap! referenced-pub-data ERR_NOT_FOUND)) })
+                )
+              )
+              u1
+            ),
+            impact-score: (+ 
+              (get impact-score
+                (default-to
+                  { total-publications: u0, total-references-received: u0, impact-score: u100 }
+                  (map-get? scholar-profiles { scholar: (get scholar (unwrap! referenced-pub-data ERR_NOT_FOUND)) })
+                )
+              )
+              significance
+            )
+          }
+        )
+      )
+      
+      ;; Update discipline metrics for referenced publication's discipline
+      (map-set discipline-metrics
+        { discipline: (get discipline (unwrap! referenced-pub-data ERR_NOT_FOUND)) }
+        (merge
+          (default-to
+            { total-publications: u0, total-references: u0 }
+            (map-get? discipline-metrics { discipline: (get discipline (unwrap! referenced-pub-data ERR_NOT_FOUND)) })
+          )
+          { 
+            total-references: (+ 
+              (get total-references
+                (default-to
+                  { total-publications: u0, total-references: u0 }
+                  (map-get? discipline-metrics { discipline: (get discipline (unwrap! referenced-pub-data ERR_NOT_FOUND)) })
+                )
+              )
+              u1
+            )
+          }
+        )
+      )
+      
+      ;; Add recognition points to referenced scholar
+      (map-set scholarly-recognition
+        { scholar: (get scholar (unwrap! referenced-pub-data ERR_NOT_FOUND)) }
+        { 
+          recognition-points: (+ 
+            (get recognition-points
+              (default-to
+                { recognition-points: u0 }
+                (map-get? scholarly-recognition { scholar: (get scholar (unwrap! referenced-pub-data ERR_NOT_FOUND)) })
+              )
+            )
+            significance
+          )
+        }
+      )
+      
+      (ok true)
+    )
+  )
+)
+
+;; Validate publication ownership (can only be done by authorized validators)
+(define-public (validate-publication (publication-id (string-ascii 64)))
+  (let
+    ((publication-data (map-get? publications { publication-id: publication-id }))
+     (validator-data (map-get? approved-validators { validator: tx-sender })))
+    (begin
+      ;; Validate publication-id
+      (asserts! (validate-publication-id publication-id) ERR_BAD_INPUT)
+      
+      (asserts! (is-some publication-data) ERR_NOT_FOUND)
+      (asserts! (is-some validator-data) ERR_UNAUTHORIZED)
+      (asserts! (get active (unwrap! validator-data ERR_UNAUTHORIZED)) ERR_UNAUTHORIZED)
+      
+      (map-set publications
+        { publication-id: publication-id }
+        (merge (unwrap! publication-data ERR_NOT_FOUND) { validated: true })
+      )
+      
+      ;; Bonus impact for validated publications
+      (map-set scholar-profiles
+        { scholar: (get scholar (unwrap! publication-data ERR_NOT_FOUND)) }
+        (merge
+          (default-to
+            { total-publications: u0, total-references-received: u0, impact-score: u100 }
+            (map-get? scholar-profiles { scholar: (get scholar (unwrap! publication-data ERR_NOT_FOUND)) })
+          )
+          { 
+            impact-score: (+ 
+              (get impact-score
+                (default-to
+                  { total-publications: u0, total-references-received: u0, impact-score: u100 }
+                  (map-get? scholar-profiles { scholar: (get scholar (unwrap! publication-data ERR_NOT_FOUND)) })
+                )
+              )
+              u50
+            )
+          }
+        )
+      )
+      
+      (ok true)
+    )
+  )
+)
